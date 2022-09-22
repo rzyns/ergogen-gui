@@ -1,22 +1,20 @@
 /*!
- * Ergogen v3.1.2
- * https://zealot.hu/ergogen
+ * Ergogen v4.0.0-develop
+ * https://ergogen.xyz
  */
 
 (function (global, factory) {
-    typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory(require('makerjs'), require('js-yaml'), require('@jscad/openjscad'), require('mathjs'), require('kle-serial'), require('semver')) :
-    typeof define === 'function' && define.amd ? define(['makerjs', 'js-yaml', '@jscad/openjscad', 'mathjs', 'kle-serial', 'semver'], factory) :
-    (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.ergogen = factory(global.makerjs, global.jsyaml, global.myjscad, global.math, global.kle, global.semver));
-})(this, (function (require$$0, require$$2, require$$2$1, require$$3, require$$1, require$$8) { 'use strict';
+    typeof exports === 'object' && typeof module !== 'undefined' ? module.exports = factory(require('makerjs'), require('js-yaml'), require('mathjs'), require('kle-serial')) :
+    typeof define === 'function' && define.amd ? define(['makerjs', 'js-yaml', 'mathjs', 'kle-serial'], factory) :
+    (global = typeof globalThis !== 'undefined' ? globalThis : global || self, global.ergogen = factory(global.makerjs, global.jsyaml, global.math, global.kle));
+})(this, (function (require$$0, require$$2, require$$3, require$$1) { 'use strict';
 
     function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'default' in e ? e : { 'default': e }; }
 
     var require$$0__default = /*#__PURE__*/_interopDefaultLegacy(require$$0);
     var require$$2__default = /*#__PURE__*/_interopDefaultLegacy(require$$2);
-    var require$$2__default$1 = /*#__PURE__*/_interopDefaultLegacy(require$$2$1);
     var require$$3__default = /*#__PURE__*/_interopDefaultLegacy(require$$3);
     var require$$1__default = /*#__PURE__*/_interopDefaultLegacy(require$$1);
-    var require$$8__default = /*#__PURE__*/_interopDefaultLegacy(require$$8);
 
     var utils = {};
 
@@ -27,7 +25,7 @@
         return JSON.parse(JSON.stringify(value))
     };
 
-    utils.deep = (obj, key, val) => {
+    const deep = utils.deep = (obj, key, val) => {
         const levels = key.split('.');
         const last = levels.pop();
         let step = obj;
@@ -38,6 +36,20 @@
         if (val === undefined) return step[last]
         step[last] = val;
         return obj
+    };
+
+    utils.template = (str, vals={}) => {
+        const regex = /\{\{([^}]*)\}\}/g;
+        let res = str;
+        let shift = 0;
+        for (const match of str.matchAll(regex)) {
+            const replacement = deep(vals, match[1]) || '';
+            res = res.substring(0, match.index + shift)
+                + replacement
+                + res.substring(match.index + shift + match[0].length);
+            shift += replacement.length - match[0].length;
+        }
+        return res
     };
 
     const eq = utils.eq = (a=[], b=[]) => {
@@ -76,9 +88,23 @@
         return res
     };
 
-    const farPoint = [1234.1234, 2143.56789];
+    utils.bbox = (arr) => {
+        let minx = Infinity;
+        let miny = Infinity;
+        let maxx = -Infinity;
+        let maxy = -Infinity;
+        for (const p of arr) {
+            minx = Math.min(minx, p[0]);
+            miny = Math.min(miny, p[1]);
+            maxx = Math.max(maxx, p[0]);
+            maxy = Math.max(maxy, p[1]);
+        }
+        return {low: [minx, miny], high: [maxx, maxy]}
+    };
 
-    utils.union = (a, b) => {
+    const farPoint = utils.farPoint = [1234.1234, 2143.56789];
+
+    utils.union = utils.add = (a, b) => {
         return m$5.model.combine(a, b, false, true, false, true, {
             farPoint
         })
@@ -104,12 +130,37 @@
         }
     };
 
+    const semver = utils.semver = (str, name='') => {
+        let main = str.split('-')[0];
+        if (main.startsWith('v')) {
+            main = main.substring(1);
+        }
+        while (main.split('.').length < 3) {
+            main += '.0';
+        }
+        if (/^\d+\.\d+\.\d+$/.test(main)) {
+            const parts = main.split('.').map(part => parseInt(part, 10));
+            return {major: parts[0], minor: parts[1], patch: parts[2]}
+        } else throw new Error(`Invalid semver "${str}" at ${name}!`)
+    };
+
+    utils.satisfies = (current, expected) => {
+        if (current.major === undefined) current = semver(current);
+        if (expected.major === undefined) expected = semver(expected);
+        return current.major === expected.major && (
+            current.minor > expected.minor || (
+                current.minor === expected.minor && 
+                current.patch >= expected.patch
+            )
+        )
+    };
+
     var io$1 = {};
 
     var assert$1 = {};
 
     const m$4 = require$$0__default["default"];
-    const u$6 = utils;
+    const u$7 = utils;
 
     var point = class Point {
         constructor(x=0, y=0, r=0, meta={}) {
@@ -135,6 +186,7 @@
         }
 
         shift(s, relative=true) {
+            s[0] *= this.meta.mirrored ? -1 : 1;
             if (relative) {
                 s = m$4.point.rotate(s, this.r);
             }
@@ -144,7 +196,10 @@
         }
 
         rotate(angle, origin=[0, 0]) {
-            this.p = m$4.point.rotate(this.p, angle, origin);
+            angle *= this.meta.mirrored ? -1 : 1;
+            if (origin) {
+                this.p = m$4.point.rotate(this.p, angle, origin);
+            }
             this.r += angle;
             return this
         }
@@ -160,7 +215,7 @@
                 this.x,
                 this.y,
                 this.r,
-                u$6.deepcopy(this.meta)
+                u$7.deepcopy(this.meta)
             )
         }
 
@@ -168,9 +223,19 @@
             return m$4.model.moveRelative(m$4.model.rotate(model, this.r), this.p)
         }
 
+        unposition(model) {
+            return m$4.model.rotate(m$4.model.moveRelative(model, [-this.x, -this.y]), -this.r)
+        }
+
         rect(size=14) {
-            let rect = u$6.rect(size, size, [-size/2, -size/2], this.meta.mirrored);
+            let rect = u$7.rect(size, size, [-size/2, -size/2]);
             return this.position(rect)
+        }
+
+        angle(other) {
+            const dx = other.x - this.x;
+            const dy = other.y - this.y;
+            return -Math.atan2(dx, dy) * (180 / Math.PI)
         }
     };
 
@@ -217,7 +282,7 @@
     const arr = assert$1.arr = (raw, name, length, _type, _default) => units => {
         assert(type(raw)(units) == 'array', `Field "${name}" should be an array!`);
         assert(length == 0 || raw.length == length, `Field "${name}" should be an array of length ${length}!`);
-        raw = raw.map(val => val || _default);
+        raw = raw.map(val => val === undefined ? _default : val);
         raw.map(val => assert(type(val)(units) == _type, `Field "${name}" should contain ${_type}s!`));
         if (_type == 'number') {
             raw = raw.map(val => mathnum(val)(units));
@@ -235,15 +300,15 @@
         return xy(raw, name)(units)
     };
 
-    assert$1.trbl = (raw, name) => units => {
+    assert$1.trbl = (raw, name, _default=0) => units => {
         if (!Array.isArray(raw)) raw = [raw, raw, raw, raw];
         if (raw.length == 2) raw = [raw[1], raw[0], raw[1], raw[0]];
-        return numarr(raw, name, 4, 'number', 0)(units)
+        return arr(raw, name, 4, 'number', _default)(units)
     };
 
     var kle$2 = {};
 
-    const u$5 = utils;
+    const u$6 = utils;
     const kle$1 = require$$1__default["default"];
     const yaml$1 = require$$2__default["default"];
 
@@ -304,7 +369,7 @@
             };
             
             // passing along metadata to each key
-            converted.columns[colid].rows[rowid] = u$5.deepcopy(meta);
+            converted.columns[colid].rows[rowid] = u$6.deepcopy(meta);
             converted.columns[colid].rows[rowid].width = key.width;
             converted.columns[colid].rows[rowid].height = key.height;
             converted.columns[colid].rows[rowid].label = label;
@@ -319,24 +384,23 @@
 
     const yaml = require$$2__default["default"];
     const makerjs = require$$0__default["default"];
-    const jscad = require$$2__default$1["default"];
 
-    const u$4 = utils;
-    const a$7 = assert$1;
+    const u$5 = utils;
+    const a$8 = assert$1;
     const kle = kle$2;
 
     io$1.interpret = (raw, logger) => {
         let config = raw;
         let format = 'OBJ';
-        if (a$7.type(raw)() == 'string') {
+        if (a$8.type(raw)() == 'string') {
             try {
                 config = yaml.safeLoad(raw);
                 format = 'YAML';
             } catch (yamlex) {
                 try {
                     config = new Function(raw)();
-                    a$7.assert(
-                        a$7.type(config)() == 'object',
+                    a$8.assert(
+                        a$8.type(config)() == 'object',
                         'Input JS Code doesn\'t resolve into an object!'
                     );
                     format = 'JS';
@@ -356,7 +420,7 @@
             // nope... nevermind
         }
 
-        if (a$7.type(config)() != 'object') {
+        if (a$8.type(config)() != 'object') {
             throw new Error('Input doesn\'t resolve into an object!')
         }
 
@@ -370,7 +434,7 @@
     io$1.twodee = (model, debug) => {
         const assembly = makerjs.model.originate({
             models: {
-                export: u$4.deepcopy(model)
+                export: u$5.deepcopy(model)
             },
             units: 'mm'
         });
@@ -385,41 +449,26 @@
         return result
     };
 
-    io$1.threedee = async (script, debug) => {
-        const compiled = await new Promise((resolve, reject) => {
-            jscad.compile(script, {}).then(compiled => {
-                resolve(compiled);
-            });
-        });
-        const result = {
-            stl: jscad.generateOutput('stla', compiled).asBuffer().toString()
-        };
-        if (debug) {
-            result.jscad = script;
-        }
-        return result
-    };
-
     var prepare$1 = {};
 
-    const u$3 = utils;
-    const a$6 = assert$1;
+    const u$4 = utils;
+    const a$7 = assert$1;
 
     const _extend = prepare$1._extend = (to, from) => {
-        const to_type = a$6.type(to)();
-        const from_type = a$6.type(from)();
+        const to_type = a$7.type(to)();
+        const from_type = a$7.type(from)();
         if (from === undefined || from === null) return to
         if (from === '$unset') return undefined
         if (to_type != from_type) return from
         if (from_type == 'object') {
-            const res = u$3.deepcopy(to);
+            const res = u$4.deepcopy(to);
             for (const key of Object.keys(from)) {
                 res[key] = _extend(to[key], from[key]);
                 if (res[key] === undefined) delete res[key];
             }
             return res
         } else if (from_type == 'array') {
-            const res = u$3.deepcopy(to);
+            const res = u$4.deepcopy(to);
             for (const [i, val] of from.entries()) {
                 res[i] = _extend(res[i], val);
             }
@@ -437,7 +486,7 @@
     };
 
     const traverse = prepare$1.traverse = (config, root, breadcrumbs, op) => {
-        if (a$6.type(config)() == 'object') {
+        if (a$7.type(config)() == 'object') {
             const result = {};
             for (const [key, val] of Object.entries(config)) {
                 breadcrumbs.push(key);
@@ -445,7 +494,7 @@
                 breadcrumbs.pop();
             }
             return result
-        } else if (a$6.type(config)() == 'array') {
+        } else if (a$7.type(config)() == 'array') {
             const result = [];
             let index = 0;
             for (const val of config) {
@@ -460,24 +509,24 @@
     };
 
     prepare$1.unnest = config => traverse(config, config, [], (target, key, val) => {
-        u$3.deep(target, key, val);
+        u$4.deep(target, key, val);
     });
 
     prepare$1.inherit = config => traverse(config, config, [], (target, key, val, root, breadcrumbs) => {
         if (val && val.$extends !== undefined) {
-            let candidates = u$3.deepcopy(val.$extends);
-            if (a$6.type(candidates)() !== 'array') candidates = [candidates];
+            let candidates = u$4.deepcopy(val.$extends);
+            if (a$7.type(candidates)() !== 'array') candidates = [candidates];
             const list = [val];
             while (candidates.length) {
                 const path = candidates.shift();
-                const other = u$3.deepcopy(u$3.deep(root, path));
-                a$6.assert(other, `"${path}" (reached from "${breadcrumbs.join('.')}.$extends") does not name a valid inheritance target!`);
+                const other = u$4.deepcopy(u$4.deep(root, path));
+                a$7.assert(other, `"${path}" (reached from "${breadcrumbs.join('.')}.$extends") does not name a valid inheritance target!`);
                 let parents = other.$extends || [];
-                if (a$6.type(parents)() !== 'array') parents = [parents];
+                if (a$7.type(parents)() !== 'array') parents = [parents];
                 candidates = candidates.concat(parents);
                 list.unshift(other);
             }
-            val = extend.apply(undefined, list);
+            val = extend.apply(null, list);
             delete val.$extends;
         }
         target[key] = val;
@@ -486,7 +535,7 @@
     prepare$1.parameterize = config => traverse(config, config, [], (target, key, val, root, breadcrumbs) => {
 
         // we only care about objects
-        if (a$6.type(val)() !== 'object') {
+        if (a$7.type(val)() !== 'object') {
             target[key] = val;
             return 
         }
@@ -510,8 +559,8 @@
             throw new Error(`Trying to parameterize through "${breadcrumbs}.$args", but the corresponding "$params" field is missing!`)
         }
 
-        params = a$6.strarr(params, `${breadcrumbs}.$params`);
-        args = a$6.sane(args, `${breadcrumbs}.$args`, 'array')();
+        params = a$7.strarr(params, `${breadcrumbs}.$params`);
+        args = a$7.sane(args, `${breadcrumbs}.$args`, 'array')();
         if (params.length !== args.length) {
             throw new Error(`The number of "$params" and "$args" don't match for "${breadcrumbs}"!`)
         }
@@ -534,120 +583,175 @@
 
     var units = {};
 
-    const a$5 = assert$1;
+    const a$6 = assert$1;
     const prep$3 = prepare$1;
 
     const default_units = {
         U: 19.05,
         u: 19,
         cx: 18,
-        cy: 17
+        cy: 17,
+        $default_stagger: 0,
+        $default_spread: 'u',
+        $default_splay: 0,
+        $default_height: 'u-1',
+        $default_width: 'u-1',
+        $default_padding: 'u',
+        $default_autobind: 10
     };
 
     units.parse = (config = {}) => {
         const raw_units = prep$3.extend(
             default_units,
-            a$5.sane(config.units || {}, 'units', 'object')(),
-            a$5.sane(config.variables || {}, 'variables', 'object')()
+            a$6.sane(config.units || {}, 'units', 'object')(),
+            a$6.sane(config.variables || {}, 'variables', 'object')()
         );
         const units = {};
         for (const [key, val] of Object.entries(raw_units)) {
-            units[key] = a$5.mathnum(val)(units);
+            units[key] = a$6.mathnum(val)(units);
         }
         return units
     };
 
     var points = {};
 
-    var anchor$1 = {};
+    var anchor$3 = {};
 
-    const a$4 = assert$1;
-    const Point$1 = point;
+    const a$5 = assert$1;
+    const Point$2 = point;
 
-    const mirror_ref = anchor$1.mirror = (ref, mirror) => {
+    const mirror_ref = anchor$3.mirror = (ref, mirror=true) => {
         if (mirror) {
             if (ref.startsWith('mirror_')) {
                 return ref.substring(7)
-            } else {
-                return 'mirror_' + ref
             }
+            return 'mirror_' + ref
         }
         return ref
     };
 
-    const anchor = anchor$1.parse = (raw, name, points={}, check_unexpected=true, default_point=new Point$1(), mirror=false) => units => {
-        if (a$4.type(raw)() == 'array') {
+    const aggregator_common = ['parts', 'method'];
+
+    const aggregators = {
+        average: (config, name, parts) => {
+            a$5.unexpected(config, name, aggregator_common);
+            let x = 0, y = 0, r = 0;
+            const len = parts.length;
+            for (const part of parts) {
+                x += part.x;
+                y += part.y;
+                r += part.r;
+            }
+            return new Point$2(x / len, y / len, r / len)
+        }
+    };
+
+    const anchor$2 = anchor$3.parse = (raw, name, points={}, default_point=new Point$2(), mirror=false) => units => {
+
+        //
+        // Anchor type handling
+        //
+
+        if (a$5.type(raw)() == 'string') {
+            raw = {ref: raw};
+        }
+
+        else if (a$5.type(raw)() == 'array') {
             // recursive call with incremental default_point mods, according to `affect`s
             let current = default_point.clone();
+            let index = 1;
             for (const step of raw) {
-                current = anchor(step, name, points, check_unexpected, current, mirror)(units);
+                current = anchor$2(step, `${name}[${index++}]`, points, current, mirror)(units);
             }
             return current
         }
-        if (check_unexpected) a$4.unexpected(raw, name, ['ref', 'orient', 'shift', 'rotate', 'affect']);
+
+        a$5.unexpected(raw, name, ['ref', 'aggregate', 'orient', 'shift', 'rotate', 'affect']);
+
+        //
+        // Reference or aggregate handling
+        //
+        
         let point = default_point.clone();
+        if (raw.ref !== undefined && raw.aggregate !== undefined) {
+            throw new Error(`Fields "ref" and "aggregate" cannot appear together in anchor "${name}"!`)
+        }
+
         if (raw.ref !== undefined) {
-            if (a$4.type(raw.ref)() == 'array') {
-                // averaging multiple anchors
-                let x = 0, y = 0, r = 0;
-                const len = raw.ref.length;
-                for (const ref of raw.ref) {
-                    const parsed_ref = mirror_ref(ref, mirror);
-                    a$4.assert(points[parsed_ref], `Unknown point reference "${parsed_ref}" in anchor "${name}"!`);
-                    const resolved = points[parsed_ref];
-                    x += resolved.x;
-                    y += resolved.y;
-                    r += resolved.r;
-                }
-                point = new Point$1(x / len, y / len, r / len);
-            } else {
+            // base case, resolve directly
+            if (a$5.type(raw.ref)() == 'string') {
                 const parsed_ref = mirror_ref(raw.ref, mirror);
-                a$4.assert(points[parsed_ref], `Unknown point reference "${parsed_ref}" in anchor "${name}"!`);
+                a$5.assert(points[parsed_ref], `Unknown point reference "${parsed_ref}" in anchor "${name}"!`);
                 point = points[parsed_ref].clone();
+            // recursive case
+            } else {
+                point = anchor$2(raw.ref, `${name}.ref`, points, default_point, mirror)(units);
             }
         }
+
+        if (raw.aggregate !== undefined) {
+            raw.aggregate = a$5.sane(raw.aggregate, `${name}.aggregate`, 'object')();
+            raw.aggregate.method = a$5.sane(raw.aggregate.method || 'average', `${name}.aggregate.method`, 'string')();
+            a$5.assert(aggregators[raw.aggregate.method], `Unknown aggregator method "${raw.aggregate.method}" in anchor "${name}"!`);
+            raw.aggregate.parts = a$5.sane(raw.aggregate.parts || [], `${name}.aggregate.parts`, 'array')();
+
+            const parts = [];
+            let index = 1;
+            for (const part of raw.aggregate.parts) {
+                parts.push(anchor$2(part, `${name}.aggregate.parts[${index++}]`, points, default_point, mirror)(units));
+            }
+
+            point = aggregators[raw.aggregate.method](raw.aggregate, `${name}.aggregate`, parts);
+        }
+
+        //
+        // Actual orient/shift/rotate/affect handling
+        //
+
+        const rotator = (config, name, point) => {
+            // simple case: number gets added to point rotation
+            if (a$5.type(config)(units) == 'number') {
+                let angle = a$5.sane(config, name, 'number')(units);
+                point.rotate(angle, false);
+            // recursive case: points turns "towards" target anchor
+            } else {
+                const target = anchor$2(config, name, points, default_point, mirror)(units);
+                point.r = point.angle(target);
+            }
+        };
+
         if (raw.orient !== undefined) {
-            let angle = a$4.sane(raw.orient, `${name}.orient`, 'number')(units);
-            if (point.meta.mirrored) {
-                angle = -angle;
-            } 
-            point.r += angle;
+            rotator(raw.orient, `${name}.orient`, point);
         }
         if (raw.shift !== undefined) {
-            let xyval = a$4.wh(raw.shift, `${name}.shift`)(units);
-            if (point.meta.mirrored) {
-                xyval[0] = -xyval[0];
-            }
-            point.shift(xyval, true);
+            let xyval = a$5.wh(raw.shift, `${name}.shift`)(units);
+            point.shift(xyval);
         }
         if (raw.rotate !== undefined) {
-            let angle = a$4.sane(raw.rotate, `${name}.rotate`, 'number')(units);
-            if (point.meta.mirrored) {
-                angle = -angle;
-            } 
-            point.r += angle;
+            rotator(raw.rotate, `${name}.rotate`, point);
         }
         if (raw.affect !== undefined) {
             const candidate = point.clone();
             point = default_point.clone();
             point.meta = candidate.meta;
             let affect = raw.affect;
-            if (a$4.type(affect)() == 'string') affect = affect.split('');
-            affect = a$4.strarr(affect, `${name}.affect`);
+            if (a$5.type(affect)() == 'string') affect = affect.split('');
+            affect = a$5.strarr(affect, `${name}.affect`);
             let i = 0;
             for (const aff of affect) {
-                a$4.in(aff, `${name}.affect[${++i}]`, ['x', 'y', 'r']);
+                a$5.in(aff, `${name}.affect[${++i}]`, ['x', 'y', 'r']);
                 point[aff] = candidate[aff];
             }
         }
+
         return point
     };
 
     const m$3 = require$$0__default["default"];
-    const u$2 = utils;
-    const a$3 = assert$1;
+    const u$3 = utils;
+    const a$4 = assert$1;
     const prep$2 = prepare$1;
-    const anchor_lib$2 = anchor$1;
+    const anchor_lib$2 = anchor$3;
 
     const push_rotation = points._push_rotation = (list, angle, origin) => {
         let candidate = origin;
@@ -664,27 +768,31 @@
 
         // zone-wide sanitization
 
-        a$3.unexpected(zone, `points.zones.${zone_name}`, ['columns', 'rows', 'key']);
+        a$4.unexpected(zone, `points.zones.${zone_name}`, ['columns', 'rows', 'key']);
         // the anchor comes from "above", because it needs other zones too (for references)
-        const cols = a$3.sane(zone.columns || {}, `points.zones.${zone_name}.columns`, 'object')();
-        const zone_wide_rows = a$3.sane(zone.rows || {}, `points.zones.${zone_name}.rows`, 'object')();
+        const cols = a$4.sane(zone.columns || {}, `points.zones.${zone_name}.columns`, 'object')();
+        const zone_wide_rows = a$4.sane(zone.rows || {}, `points.zones.${zone_name}.rows`, 'object')();
         for (const [key, val] of Object.entries(zone_wide_rows)) {
-            zone_wide_rows[key] = a$3.sane(val || {}, `points.zones.${zone_name}.rows.${key}`, 'object')();
+            zone_wide_rows[key] = val || {}; // no check yet, as it will be extended later
         }
-        const zone_wide_key = a$3.sane(zone.key || {}, `points.zones.${zone_name}.key`, 'object')();
+        const zone_wide_key = a$4.sane(zone.key || {}, `points.zones.${zone_name}.key`, 'object')();
 
         // algorithm prep
 
         const points = {};
         const rotations = [];
+        const zone_anchor = anchor.clone();
         // transferring the anchor rotation to "real" rotations
         rotations.push({
-            angle: anchor.r,
-            origin: anchor.p
+            angle: zone_anchor.r,
+            origin: zone_anchor.p
         });
+        // and now clear it from the anchor so that we don't apply it twice
+        zone_anchor.r = 0;
 
         // column layout
 
+        const col_minmax = {};
         if (!Object.keys(cols).length) {
             cols.default = {};
         }
@@ -694,101 +802,53 @@
             // column-level sanitization
 
             col = col || {};
+            col_minmax[col_name] = {min: Infinity, max: -Infinity};
 
-            a$3.unexpected(
+            a$4.unexpected(
                 col,
                 `points.zones.${zone_name}.columns.${col_name}`,
-                ['stagger', 'spread', 'rotate', 'origin', 'rows', 'row_overrides', 'key']
+                ['rows', 'key']
             );
-            col.stagger = a$3.sane(
-                col.stagger || 0,
-                `points.zones.${zone_name}.columns.${col_name}.stagger`,
-                'number'
-            )(units);
-            col.spread = a$3.sane(
-                col.spread !== undefined ? col.spread : (first_col ? 0 : 'u'),
-                `points.zones.${zone_name}.columns.${col_name}.spread`,
-                'number'
-            )(units);
-            col.rotate = a$3.sane(
-                col.rotate || 0,
-                `points.zones.${zone_name}.columns.${col_name}.rotate`,
-                'number'
-            )(units);
-            col.origin = a$3.xy(
-                col.origin || [0, 0],
-                `points.zones.${zone_name}.columns.${col_name}.origin`
-            )(units);
-            let override = false;
-            col.rows = a$3.sane(
+            col.rows = a$4.sane(
                 col.rows || {},
                 `points.zones.${zone_name}.columns.${col_name}.rows`,
                 'object'
             )();
-            if (col.row_overrides) {
-                override = true;
-                col.rows = a$3.sane(
-                    col.row_overrides,
-                    `points.zones.${zone_name}.columns.${col_name}.row_overrides`,
-                    'object'
-                )();
-            }
             for (const [key, val] of Object.entries(col.rows)) {
-                col.rows[key] = a$3.sane(
-                    val || {},
-                    `points.zones.${zone_name}.columns.${col_name}.rows.${key}`,
-                    'object'
-                )();
+                col.rows[key] = val || {}; // again, no check yet, as it will be extended later
             }
-            col.key = a$3.sane(
+            col.key = a$4.sane(
                 col.key || {},
                 `points.zones.${zone_name}.columns.${col_name}.key`,
                 'object'
             )();
 
-            // propagating object key to name field
-
-            col.name = col_name;
-
             // combining row data from zone-wide defs and col-specific defs
-            // (while also handling potential overrides)
 
-            const actual_rows = override ? Object.keys(col.rows)
-                : Object.keys(prep$2.extend(zone_wide_rows, col.rows));
+            const actual_rows = Object.keys(prep$2.extend(zone_wide_rows, col.rows));
             if (!actual_rows.length) {
                 actual_rows.push('default');
-            }
-
-            // setting up column-level anchor
-
-            anchor.x += col.spread;
-            anchor.y += col.stagger;
-            const col_anchor = anchor.clone();
-            // clear potential rotations, as they will get re-applied anyway
-            // and we don't want to apply them twice...
-            col_anchor.r = 0;
-
-            // applying col-level rotation (cumulatively, for the next columns as well)
-
-            if (col.rotate) {
-                push_rotation(
-                    rotations,
-                    col.rotate,
-                    col_anchor.clone().shift(col.origin, false).p
-                );
             }
 
             // getting key config through the 5-level extension
 
             const keys = [];
             const default_key = {
+                stagger: units.$default_stagger,
+                spread: units.$default_spread,
+                splay: units.$default_splay,
+                origin: [0, 0],
+                orient: 0,
                 shift: [0, 0],
                 rotate: 0,
-                padding: 'u',
-                width: 1,
-                height: 1,
+                width: units.$default_width,
+                height: units.$default_height,
+                padding: units.$default_padding,
+                autobind: units.$default_autobind,
                 skip: false,
-                asym: 'both'
+                asym: 'both',
+                colrow: '{{col.name}}_{{row}}',
+                name: '{{zone.name}}_{{colrow}}'
             };
             for (const row of actual_rows) {
                 const key = prep$2.extend(
@@ -800,44 +860,141 @@
                     col.rows[row] || {}
                 );
 
-                key.name = key.name || `${zone_name}_${col_name}_${row}`;
-                key.colrow = `${col_name}_${row}`;
-                key.shift = a$3.xy(key.shift, `${key.name}.shift`)(units);
-                key.rotate = a$3.sane(key.rotate, `${key.name}.rotate`, 'number')(units);
-                key.width = a$3.sane(key.width, `${key.name}.width`, 'number')(units);
-                key.height = a$3.sane(key.height, `${key.name}.height`, 'number')(units);
-                key.padding = a$3.sane(key.padding, `${key.name}.padding`, 'number')(units);
-                key.skip = a$3.sane(key.skip, `${key.name}.skip`, 'boolean')();
-                key.asym = a$3.in(key.asym, `${key.name}.asym`, ['left', 'right', 'both']);
+                key.zone = zone;
+                key.zone.name = zone_name;
                 key.col = col;
+                key.col.name = col_name;
                 key.row = row;
+
+                key.stagger = a$4.sane(key.stagger, `${key.name}.shift`, 'number')(units);
+                key.spread = a$4.sane(key.spread, `${key.name}.spread`, 'number')(units);
+                key.splay = a$4.sane(key.splay, `${key.name}.splay`, 'number')(units);
+                key.origin = a$4.xy(key.origin, `${key.name}.origin`)(units);
+                key.orient = a$4.sane(key.orient, `${key.name}.orient`, 'number')(units);
+                key.shift = a$4.xy(key.shift, `${key.name}.shift`)(units);
+                key.rotate = a$4.sane(key.rotate, `${key.name}.rotate`, 'number')(units);
+                key.width = a$4.sane(key.width, `${key.name}.width`, 'number')(units);
+                key.height = a$4.sane(key.height, `${key.name}.height`, 'number')(units);
+                key.padding = a$4.sane(key.padding, `${key.name}.padding`, 'number')(units);
+                key.skip = a$4.sane(key.skip, `${key.name}.skip`, 'boolean')();
+                key.asym = a$4.in(key.asym, `${key.name}.asym`, ['left', 'right', 'both']);
+
+                // templating support
+                for (const [k, v] of Object.entries(key)) {
+                    if (a$4.type(v)(units) == 'string') {
+                        key[k] = u$3.template(v, key);
+                    }
+                }
+
                 keys.push(key);
             }
 
+            // setting up column-level anchor
+            if (!first_col) {
+                zone_anchor.x += keys[0].spread;
+            }
+            zone_anchor.y += keys[0].stagger;
+            const col_anchor = zone_anchor.clone();
+
+            // applying col-level rotation (cumulatively, for the next columns as well)
+
+            if (keys[0].splay) {
+                push_rotation(
+                    rotations,
+                    keys[0].splay,
+                    col_anchor.clone().shift(keys[0].origin, false).p
+                );
+            }
+
             // actually laying out keys
+            let running_anchor = col_anchor.clone();
+            for (const r of rotations) {
+                running_anchor.rotate(r.angle, r.origin);
+            }
 
             for (const key of keys) {
-                let point = col_anchor.clone();
-                for (const r of rotations) {
-                    point.rotate(r.angle, r.origin);
-                }
+
+                // copy the current column anchor
+                let point = running_anchor.clone();
+
+                // apply per-key adjustments
+                point.r += key.orient;
                 point.shift(key.shift);
                 point.r += key.rotate;
+
+                // save new key
                 point.meta = key;
                 points[key.name] = point;
-                col_anchor.y += key.padding;
+
+                // collect minmax stats for autobind
+                col_minmax[col_name].min = Math.min(col_minmax[col_name].min, point.y);
+                col_minmax[col_name].max = Math.max(col_minmax[col_name].max, point.y);
+
+                // advance the running anchor to the next position
+                running_anchor = point.clone();
+                running_anchor.shift([0, key.padding]);
             }
 
             first_col = false;
+        }
+
+        // autobind
+
+        let col_names = Object.keys(col_minmax);
+        let col_index = 0;
+        for (const [col_name, bounds] of Object.entries(col_minmax)) {
+            for (const point of Object.values(points)) {
+                if (point.meta.col.name != col_name) continue
+                if (!point.meta.autobind) continue
+                const autobind = a$4.sane(point.meta.autobind, `${point.meta.name}.autobind`, 'number')(units);
+                // specify default as -1, so we can recognize where it was left undefined even after number-ification
+                const bind = point.meta.bind = a$4.trbl(point.meta.bind, `${point.meta.name}.bind`, -1)(units);
+
+                // up
+                if (bind[0] == -1) {
+                    if (point.y < bounds.max) bind[0] = autobind;
+                    else bind[0] = 0;
+                    
+                }
+
+                // right
+                if (bind[1] == -1) {
+                    bind[1] = 0;
+                    if (col_index < col_names.length - 1) {
+                        const right = col_minmax[col_names[col_index + 1]];
+                        if (point.y >= right.min && point.y <= right.max) {
+                            bind[1] = autobind;
+                        }
+                    }
+                }
+
+                // down
+                if (bind[2] == -1) {
+                    if (point.y > bounds.min) bind[2] = autobind;
+                    else bind[2] = 0;
+                }
+
+                // left
+                if (bind[3] == -1) {
+                    bind[3] = 0;
+                    if (col_index > 0) {
+                        const left = col_minmax[col_names[col_index - 1]];
+                        if (point.y >= left.min && point.y <= left.max) {
+                            bind[3] = autobind;
+                        }
+                    }
+                }
+            }
+            col_index++;
         }
 
         return points
     };
 
     const parse_axis = points._parse_axis = (config, name, points, units) => {
-        if (!['number', 'undefined'].includes(a$3.type(config)(units))) {
-            const mirror_obj = a$3.sane(config || {}, name, 'object')();
-            const distance = a$3.sane(mirror_obj.distance || 0, `${name}.distance`, 'number')(units);
+        if (!['number', 'undefined'].includes(a$4.type(config)(units))) {
+            const mirror_obj = a$4.sane(config || {}, name, 'object')();
+            const distance = a$4.sane(mirror_obj.distance || 0, `${name}.distance`, 'number')(units);
             delete mirror_obj.distance;
             let axis = anchor_lib$2.parse(mirror_obj, name, points)(units).x;
             axis += distance / 2;
@@ -866,29 +1023,41 @@
     points.parse = (config, units) => {
 
         // config sanitization
-        a$3.unexpected(config, 'points', ['zones', 'key', 'rotate', 'mirror']);
-        const zones = a$3.sane(config.zones, 'points.zones', 'object')();
-        const global_key = a$3.sane(config.key || {}, 'points.key', 'object')();
-        const global_rotate = a$3.sane(config.rotate || 0, 'points.rotate', 'number')(units);
+        a$4.unexpected(config, 'points', ['zones', 'key', 'rotate', 'mirror']);
+        const zones = a$4.sane(config.zones, 'points.zones', 'object')();
+        const global_key = a$4.sane(config.key || {}, 'points.key', 'object')();
+        const global_rotate = a$4.sane(config.rotate || 0, 'points.rotate', 'number')(units);
         const global_mirror = config.mirror;
         let points = {};
-        let mirrored_points = {};
-        let all_points = {};
-
 
         // rendering zones
         for (let [zone_name, zone] of Object.entries(zones)) {
 
+            // zone sanitization
+            zone = a$4.sane(zone || {}, `points.zones.${zone_name}`, 'object')();
+
             // extracting keys that are handled here, not at the zone render level
-            const anchor = anchor_lib$2.parse(zone.anchor || {}, `points.zones.${zone_name}.anchor`, all_points)(units);
-            const rotate = a$3.sane(zone.rotate || 0, `points.zones.${zone_name}.rotate`, 'number')(units);
+            const anchor = anchor_lib$2.parse(zone.anchor || {}, `points.zones.${zone_name}.anchor`, points)(units);
+            const rotate = a$4.sane(zone.rotate || 0, `points.zones.${zone_name}.rotate`, 'number')(units);
             const mirror = zone.mirror;
             delete zone.anchor;
             delete zone.rotate;
             delete zone.mirror;
 
             // creating new points
-            const new_points = render_zone(zone_name, zone, anchor, global_key, units);
+            let new_points = render_zone(zone_name, zone, anchor, global_key, units);
+
+            // simplifying the names in individual point "zones" and single-key columns
+            while (Object.keys(new_points).some(k => k.endsWith('_default'))) {
+                for (const key of Object.keys(new_points)) {
+                    if (key.endsWith('_default')) {
+                        const new_key = key.slice(0, -8);
+                        new_points[new_key] = new_points[key];
+                        new_points[new_key].meta.name = new_key;
+                        delete new_points[key];
+                    }
+                }
+            }
 
             // adjusting new points
             for (const [new_name, new_point] of Object.entries(new_points)) {
@@ -906,23 +1075,20 @@
 
             // adding new points so that they can be referenced from now on
             points = Object.assign(points, new_points);
-            all_points = Object.assign(all_points, points);
 
             // per-zone mirroring for the new keys
-            const axis = parse_axis(mirror, `points.zones.${zone_name}.mirror`, all_points, units);
+            const axis = parse_axis(mirror, `points.zones.${zone_name}.mirror`, points, units);
             if (axis) {
+                const mirrored_points = {};
                 for (const new_point of Object.values(new_points)) {
                     const [mname, mp] = perform_mirror(new_point, axis);
                     if (mp) {
                         mirrored_points[mname] = mp;
-                        all_points[mname] = mp;
                     }
                 }
+                points = Object.assign(points, mirrored_points);
             }
         }
-
-        // merging regular and early-mirrored points
-        points = Object.assign(points, mirrored_points);
 
         // applying global rotation
         for (const point of Object.values(points)) {
@@ -942,8 +1108,6 @@
                 }
             }
         }
-
-        // merging the global-mirrored points as well
         points = Object.assign(points, global_mirrored_points);
 
         // removing temporary points
@@ -959,12 +1123,10 @@
 
     points.visualize = (points, units) => {
         const models = {};
-        const x_unit = units.visual_x || (units.u - 1);
-        const y_unit = units.visual_y || (units.u - 1);
         for (const [pname, p] of Object.entries(points)) {
-            const w = p.meta.width * x_unit;
-            const h = p.meta.height * y_unit;
-            const rect = u$2.rect(w, h, [-w/2, -h/2]);
+            const w = p.meta.width;
+            const h = p.meta.height;
+            const rect = u$3.rect(w, h, [-w/2, -h/2]);
             models[pname] = p.position(rect);
         }
         return {models: models}
@@ -975,12 +1137,18 @@
     var operation = {};
 
     const op_prefix = operation.op_prefix = str => {
+
+        const prefix = str[0];
         const suffix = str.slice(1);
-        if (str.startsWith('+')) return {name: suffix, operation: 'add'}
-        if (str.startsWith('-')) return {name: suffix, operation: 'subtract'}
-        if (str.startsWith('~')) return {name: suffix, operation: 'intersect'}
-        if (str.startsWith('^')) return {name: suffix, operation: 'stack'}
-        return {name: str, operation: 'add'}
+        const result = {name: suffix, operation: 'add'};
+
+        if (prefix == '+') ; // noop
+        else if (prefix == '-') result.operation = 'subtract';
+        else if (prefix == '~') result.operation = 'intersect';
+        else if (prefix == '^') result.operation = 'stack';
+        else result.name = str; // no prefix, so the name was the whole string
+
+        return result
     };
 
     operation.operation = (str, choices={}, order=Object.keys(choices)) => {
@@ -994,347 +1162,400 @@
         return res
     };
 
+    var filter$1 = {};
+
+    const u$2 = utils;
+    const a$3 = assert$1;
+    const anchor_lib$1 = anchor$3;
+    const Point$1 = point;
+    const anchor$1 = anchor_lib$1.parse;
+
+    const _true = () => true;
+    const _false = () => false;
+    const _and = arr => p => arr.map(e => e(p)).reduce((a, b) => a && b);
+    const _or = arr => p => arr.map(e => e(p)).reduce((a, b) => a || b);
+
+    const similar = (key, reference, name, units) => {
+        let neg = false;
+
+        if (reference.startsWith('-')) {
+            neg = true;
+            reference = reference.slice(1);
+        }
+
+        // support both string or regex as reference
+        let internal_tester = val => (''+val) == reference;
+        if (reference.startsWith('/')) {
+            const regex_parts = reference.split('/');
+            regex_parts.shift(); // remove starting slash
+            const flags = regex_parts.pop();
+            const regex = new RegExp(regex_parts.join('/'), flags);
+            internal_tester = val => regex.test(''+val);
+        }
+
+        // support strings, arrays, or objects as key
+        const external_tester = point => {
+            const value = u$2.deep(point, key);
+            if (a$3.type(value)() == 'array') {
+                return value.some(subkey => internal_tester(subkey))
+            } else if (a$3.type(value)() == 'object') {
+                return Object.keys(value).some(subkey => internal_tester(subkey))
+            } else {
+                return internal_tester(value)
+            }
+        };
+
+        // negation happens at the end
+        if (neg) {
+            return point => !external_tester(point)
+        }
+        return external_tester
+    };
+
+    const comparators = {
+        '~': similar
+        // TODO: extension point for other operators...
+    };
+    const symbols = Object.keys(comparators);
+
+    const simple = (exp, name, units) => {
+
+        let keys = ['meta.name', 'meta.tags'];
+        let op = '~';
+        let value;
+        const parts = exp.split(/\s+/g);
+
+        // full case
+        if (symbols.includes(parts[1])) {
+            keys = parts[0].split(',');
+            op = parts[1];
+            value = parts.slice(2).join(' ');
+        
+        // middle case, just an operator spec, default "keys"
+        } else if (symbols.includes(parts[0])) {
+            op = parts[0];
+            value = parts.slice(1).join(' ');
+
+        // basic case, only "value"
+        } else {
+            value = exp;
+        }
+
+        return point => keys.some(key => comparators[op](key, value, name, units)(point))
+    };
+
+    const complex = (config, name, units, aggregator=_or) => {
+
+        // we branch by type
+        const type = a$3.type(config)(units);
+        switch(type) {
+
+            // boolean --> either all or nothing
+            case 'boolean':
+                return config ? _true : _false
+     
+            // string --> base case, meaning a simple/single filter
+            case 'string':
+                return simple(config, name, units)
+            
+            // array --> aggregated simple filters with alternating and/or conditions
+            case 'array':
+                const alternate = aggregator == _and ? _or : _and;
+                return aggregator(config.map(elem => complex(elem, name, units, alternate)))
+
+            default:
+                throw new Error(`Unexpected type "${type}" found at filter "${name}"!`)
+        }
+    };
+
+    const contains_object = (val) => {
+        if (a$3.type(val)() == 'object') return true
+        if (a$3.type(val)() == 'array') return val.some(el => contains_object(el))
+        return false
+    };
+
+    filter$1.parse = (config, name, points={}, units={}, include_mirrors=false) => {
+        
+        let result = [];
+
+        // if a filter decl is undefined, it's just the default point at [0, 0]
+        if (config === undefined) {
+            result.push(new Point$1());
+
+        // if a filter decl is an object, or an array that contains an object at any depth, it is an anchor
+        } else if (contains_object(config)) {
+            result.push(anchor$1(config, name, points)(units));
+            if (include_mirrors) {
+                // this is strict: if the ref of the anchor doesn't have a mirror pair, it will error out
+                result.push(anchor$1(config, name, points, undefined, true)(units));
+            }
+            
+        // otherwise, it is treated as a condition to filter all available points
+        } else {
+            result = Object.values(points).filter(complex(config, name, units));
+            if (include_mirrors) {
+                // this is permissive: we only include mirrored versions if they exist, and don't fuss if they don't
+                result = result.concat(result.map(p => points[anchor_lib$1.mirror(p.meta.name)]).filter(p => !!p));
+            }
+        }
+
+        return result
+    };
+
     const m$2 = require$$0__default["default"];
     const u$1 = utils;
     const a$2 = assert$1;
     const o$1 = operation;
     const Point = point;
     const prep$1 = prepare$1;
-    const anchor_lib$1 = anchor$1;
+    const anchor = anchor$3.parse;
+    const filter = filter$1.parse;
 
-    const rectangle = (w, h, corner, bevel, name='') => {
-        const error = (dim, val) => `Rectangle for "${name}" isn't ${dim} enough for its corner and bevel (${val} - 2 * ${corner} - 2 * ${bevel} <= 0)!`;
-        const mod = 2 * (corner + bevel);
-        const cw = w - mod;
-        a$2.assert(cw >= 0, error('wide', w));
-        const ch = h - mod;
-        a$2.assert(ch >= 0, error('tall', h));
+    const binding = (base, bbox, point, units) => {
 
-        let res = new m$2.models.Rectangle(cw, ch);
-        if (bevel) {
-            res = u$1.poly([
-                [-bevel, 0],
-                [-bevel, ch],
-                [0, ch + bevel],
-                [cw, ch + bevel],
-                [cw + bevel, ch],
-                [cw + bevel, 0],
-                [cw, -bevel],
-                [0, -bevel]
-            ]);
+        let bind = a$2.trbl(point.meta.bind || 0, `${point.meta.name}.bind`)(units);
+        // if it's a mirrored key, we swap the left and right bind values
+        if (point.meta.mirrored) {
+            bind = [bind[0], bind[3], bind[2], bind[1]];
         }
-        if (corner > 0) res = m$2.model.outline(res, corner, 0);
-        return m$2.model.moveRelative(res, [corner + bevel, corner + bevel])
+
+        const bt = Math.max(bbox.high[1], 0) + Math.max(bind[0], 0);
+        const br = Math.max(bbox.high[0], 0) + Math.max(bind[1], 0);
+        const bd = Math.min(bbox.low[1], 0) - Math.max(bind[2], 0);
+        const bl = Math.min(bbox.low[0], 0) - Math.max(bind[3], 0);
+
+        if (bind[0] || bind[1]) base = u$1.union(base, u$1.rect(br, bt));
+        if (bind[1] || bind[2]) base = u$1.union(base, u$1.rect(br, -bd, [0, bd]));
+        if (bind[2] || bind[3]) base = u$1.union(base, u$1.rect(-bl, -bd, [bl, bd]));
+        if (bind[3] || bind[0]) base = u$1.union(base, u$1.rect(-bl, bt, [bl, 0]));
+
+        return base
     };
 
-    const layout = outlines._layout = (config = {}, points = {}, units = {}) => {
+    const rectangle = (config, name, points, outlines, units) => {
 
-        // Glue config sanitization
+        // prepare params
+        a$2.unexpected(config, `${name}`, ['size', 'corner', 'bevel']);
+        const size = a$2.wh(config.size, `${name}.size`)(units);
+        const rec_units = prep$1.extend({
+            sx: size[0],
+            sy: size[1]
+        }, units);
+        const corner = a$2.sane(config.corner || 0, `${name}.corner`, 'number')(rec_units);
+        const bevel = a$2.sane(config.bevel || 0, `${name}.bevel`, 'number')(rec_units);
 
-        const parsed_glue = u$1.deepcopy(a$2.sane(config, 'outlines.glue', 'object')());
-        for (let [gkey, gval] of Object.entries(parsed_glue)) {
-            a$2.unexpected(gval, `outlines.glue.${gkey}`, ['top', 'bottom', 'waypoints', 'extra']);
-        
-            for (const y of ['top', 'bottom']) {
-                a$2.unexpected(gval[y], `outlines.glue.${gkey}.${y}`, ['left', 'right']);
-                gval[y].left = anchor_lib$1.parse(gval[y].left, `outlines.glue.${gkey}.${y}.left`, points);
-                if (a$2.type(gval[y].right)(units) != 'number') {
-                    gval[y].right = anchor_lib$1.parse(gval[y].right, `outlines.glue.${gkey}.${y}.right`, points);
-                }
+        // return shape function and its units
+        return [() => {
+
+            const error = (dim, val) => `Rectangle for "${name}" isn't ${dim} enough for its corner and bevel (${val} - 2 * ${corner} - 2 * ${bevel} <= 0)!`;
+            const [w, h] = size;
+            const mod = 2 * (corner + bevel);
+            const cw = w - mod;
+            a$2.assert(cw >= 0, error('wide', w));
+            const ch = h - mod;
+            a$2.assert(ch >= 0, error('tall', h));
+
+            let rect = new m$2.models.Rectangle(cw, ch);
+            if (bevel) {
+                rect = u$1.poly([
+                    [-bevel, 0],
+                    [-bevel, ch],
+                    [0, ch + bevel],
+                    [cw, ch + bevel],
+                    [cw + bevel, ch],
+                    [cw + bevel, 0],
+                    [cw, -bevel],
+                    [0, -bevel]
+                ]);
             }
-        
-            gval.waypoints = a$2.sane(gval.waypoints || [], `outlines.glue.${gkey}.waypoints`, 'array')(units);
-            let wi = 0;
-            gval.waypoints = gval.waypoints.map(w => {
-                const name = `outlines.glue.${gkey}.waypoints[${++wi}]`;
-                a$2.unexpected(w, name, ['percent', 'width']);
-                w.percent = a$2.sane(w.percent, name + '.percent', 'number')(units);
-                w.width = a$2.wh(w.width, name + '.width')(units);
-                return w
-            });
+            if (corner > 0) rect = m$2.model.outline(rect, corner, 0);
+            rect = m$2.model.moveRelative(rect, [-cw/2, -ch/2]);
+            const bbox = {high: [w/2, h/2], low: [-w/2, -h/2]};
 
-            parsed_glue[gkey] = gval;
+            return [rect, bbox]
+        }, rec_units]
+    };
+
+    const circle = (config, name, points, outlines, units) => {
+
+        // prepare params
+        a$2.unexpected(config, `${name}`, ['radius']);
+        const radius = a$2.sane(config.radius, `${name}.radius`, 'number')(units);
+        const circ_units = prep$1.extend({
+            r: radius
+        }, units);
+
+        // return shape function and its units
+        return [() => {
+            let circle = u$1.circle([0, 0], radius);
+            const bbox = {high: [radius, radius], low: [-radius, -radius]};
+            return [circle, bbox]
+        }, circ_units]
+    };
+
+    const polygon = (config, name, points, outlines, units) => {
+
+        // prepare params
+        a$2.unexpected(config, `${name}`, ['points']);
+        const poly_points = a$2.sane(config.points, `${name}.points`, 'array')();
+
+        // return shape function and its units
+        return [point => {
+            const parsed_points = [];
+            // the poly starts at [0, 0] as it will be positioned later
+            // but we keep the point metadata for potential mirroring purposes
+            let last_anchor = new Point(0, 0, 0, point.meta);
+            let poly_index = -1;
+            for (const poly_point of poly_points) {
+                const poly_name = `${name}.points[${++poly_index}]`;
+                last_anchor = anchor(poly_point, poly_name, points, last_anchor)(units);
+                parsed_points.push(last_anchor.p);
+            }
+            let poly = u$1.poly(parsed_points);
+            const bbox = u$1.bbox(parsed_points);
+            return [poly, bbox]
+        }, units]
+    };
+
+    const outline = (config, name, points, outlines, units) => {
+
+        // prepare params
+        a$2.unexpected(config, `${name}`, ['name', 'origin']);
+        a$2.assert(outlines[config.name], `Field "${name}.name" does not name an existing outline!`);
+        const origin = anchor(config.origin || {}, `${name}.origin`, points)(units);
+        
+        // return shape function and its units
+        return [() => {
+            let o = u$1.deepcopy(outlines[config.name]);
+            o = origin.unposition(o);
+            const bbox = m$2.measure.modelExtents(o);
+            return [o, bbox]
+        }, units]
+    };
+
+    const whats = {
+        rectangle,
+        circle,
+        polygon,
+        outline
+    };
+
+    const expand_shorthand = (config, units) => {
+        if (a$2.type(config.expand)(units) == 'string') {
+            config.expand.slice(0, -1);
+            const suffix = config.expand.slice(-1);
+            let expand = suffix;
+            let joints = 0;
+            
+            if (suffix == ')') ; // noop
+            else if (suffix == '>') joints = 1;
+            else if (suffix == ']') joints = 2;
+            else expand = config.expand;
+            
+            config.expand = parseFloat(expand);
+            config.joints = config.joints || joints;
         }
-
-
-        // TODO: handle glue.extra (or revoke it from the docs)
-
-        return (params, export_name, expected) => {
-
-            // Layout params sanitization
-
-            a$2.unexpected(params, `${export_name}`, expected.concat(['side', 'tags', 'glue', 'size', 'corner', 'bevel', 'bound']));
-            const size = a$2.wh(params.size, `${export_name}.size`)(units);
-            const relative_units = prep$1.extend({
-                sx: size[0],
-                sy: size[1]
-            }, units);
-
-
-
-            const side = a$2.in(params.side, `${export_name}.side`, ['left', 'right', 'middle', 'both', 'glue']);
-            const tags = a$2.sane(params.tags || [], `${export_name}.tags`, 'array')();
-            const corner = a$2.sane(params.corner || 0, `${export_name}.corner`, 'number')(relative_units);
-            const bevel = a$2.sane(params.bevel || 0, `${export_name}.bevel`, 'number')(relative_units);
-            const bound = a$2.sane(params.bound === undefined ? true : params.bound, `${export_name}.bound`, 'boolean')();
-
-            // Actual layout
-
-            let left = {models: {}};
-            let right = {models: {}};
-            if (['left', 'right', 'middle', 'both'].includes(side)) {
-                for (const [pname, p] of Object.entries(points)) {
-
-                    // filter by tags, if necessary
-                    if (tags.length) {
-                        const source = p.meta.tags || {};
-                        const point_tags = Object.keys(source).filter(t => !!source[t]);
-                        const relevant = point_tags.some(pt => tags.includes(pt));
-                        if (!relevant) continue
-                    }
-
-                    let from_x = -size[0] / 2, to_x = size[0] / 2;
-                    let from_y = -size[1] / 2, to_y = size[1] / 2;
-
-                    // the original position
-                    let rect = rectangle(to_x - from_x, to_y - from_y, corner, bevel, `${export_name}.size`);
-                    rect = m$2.model.moveRelative(rect, [from_x, from_y]);
-
-                    // extra binding "material", if necessary
-                    if (bound) {
-                        let bind = a$2.trbl(p.meta.bind || 0, `${pname}.bind`)(relative_units);
-                        // if it's a mirrored key, we swap the left and right bind values
-                        if (p.meta.mirrored) {
-                            bind = [bind[0], bind[3], bind[2], bind[1]];
-                        }
         
-                        const bt = to_y + Math.max(bind[0], 0);
-                        const br = to_x + Math.max(bind[1], 0);
-                        const bd = from_y - Math.max(bind[2], 0);
-                        const bl = from_x - Math.max(bind[3], 0);
-        
-                        if (bind[0] || bind[1]) rect = u$1.union(rect, u$1.rect(br, bt));
-                        if (bind[1] || bind[2]) rect = u$1.union(rect, u$1.rect(br, -bd, [0, bd]));
-                        if (bind[2] || bind[3]) rect = u$1.union(rect, u$1.rect(-bl, -bd, [bl, bd]));
-                        if (bind[3] || bind[0]) rect = u$1.union(rect, u$1.rect(-bl, bt, [bl, 0]));
-                    }
-                    
-                    // positioning and unioning the resulting shape
-                    rect = p.position(rect);
-                    if (p.meta.mirrored) {
-                        right = u$1.union(right, rect);
-                    } else {
-                        left = u$1.union(left, rect);
-                    }
-                }
-            }
-            if (side == 'left') return left
-            if (side == 'right') return right
-
-            // allow opting out of gluing, when
-            // A) there are no glue definitions, or
-            // B) glue is explicitly set to false
-            const glue_opt_out = (!Object.keys(parsed_glue).length || params.glue === false);
-
-            let glue = {models: {}};
-            if (bound && ['middle', 'both', 'glue'].includes(side) && !glue_opt_out) {
-
-                const default_glue_name = Object.keys(parsed_glue)[0];
-                const computed_glue_name = a$2.sane(params.glue || default_glue_name, `${export_name}.glue`, 'string')();
-                const glue_def = parsed_glue[computed_glue_name];
-                a$2.assert(glue_def, `Field "${export_name}.glue" does not name a valid glue!`);
-
-                const get_line = (anchor) => {
-                    if (a$2.type(anchor)(relative_units) == 'number') {
-                        return u$1.line([anchor, -1000], [anchor, 1000])
-                    }
-
-                    // if it wasn't a number, then it's a (possibly relative) anchor
-                    const from = anchor(relative_units).clone();
-                    const to = from.clone().shift([from.meta.mirrored ? -1 : 1, 0]);
-
-                    return u$1.line(from.p, to.p)
-                };
-
-                const tll = get_line(glue_def.top.left);
-                const trl = get_line(glue_def.top.right);
-                const tip = m$2.path.converge(tll, trl);
-                if (!tip) {
-                    throw new Error(`Top lines don't intersect in glue "${computed_glue_name}"!`)
-                }
-                const tlp = u$1.eq(tll.origin, tip) ? tll.end : tll.origin;
-                const trp = u$1.eq(trl.origin, tip) ? trl.end : trl.origin;
-        
-                const bll = get_line(glue_def.bottom.left);
-                const brl = get_line(glue_def.bottom.right);
-                const bip = m$2.path.converge(bll, brl);
-                if (!bip) {
-                    throw new Error(`Bottom lines don't intersect in glue "${computed_glue_name}"!`)
-                }
-                const blp = u$1.eq(bll.origin, bip) ? bll.end : bll.origin;
-                const brp = u$1.eq(brl.origin, bip) ? brl.end : brl.origin;
-        
-                const left_waypoints = [];
-                const right_waypoints = [];
-
-                for (const w of glue_def.waypoints) {
-                    const percent = w.percent / 100;
-                    const center_x = tip[0] + percent * (bip[0] - tip[0]);
-                    const center_y = tip[1] + percent * (bip[1] - tip[1]);
-                    const left_x = center_x - w.width[0];
-                    const right_x = center_x + w.width[1];
-                    left_waypoints.push([left_x, center_y]);
-                    right_waypoints.unshift([right_x, center_y]);
-                }
-                
-                let waypoints;
-                const is_split = a$2.type(glue_def.top.right)(relative_units) == 'number';
-                if (is_split) {
-                    waypoints = [tip, tlp]
-                    .concat(left_waypoints)
-                    .concat([blp, bip]);
-                } else {
-                    waypoints = [trp, tip, tlp]
-                    .concat(left_waypoints)
-                    .concat([blp, bip, brp])
-                    .concat(right_waypoints);
-                }
-
-                glue = u$1.poly(waypoints);
-            }
-            if (side == 'glue') return glue
-
-            if (side == 'middle') {
-                let middle = u$1.subtract(glue, left);
-                middle = u$1.subtract(middle, right);
-                return middle
-            }
-
-            let both = u$1.union(u$1.deepcopy(left), glue);
-            both = u$1.union(both, u$1.deepcopy(right));
-            return both
+        if (a$2.type(config.joints)(units) == 'string') {
+            if (config.joints == 'round') config.joints = 0;
+            if (config.joints == 'pointy') config.joints = 1;
+            if (config.joints == 'beveled') config.joints = 2;
         }
     };
 
     outlines.parse = (config = {}, points = {}, units = {}) => {
-        a$2.unexpected(config, 'outline', ['glue', 'exports']);
-        const layout_fn = layout(config.glue, points, units);
 
+        // output outlines will be collected here
         const outlines = {};
 
-        const ex = a$2.sane(config.exports || {}, 'outlines.exports', 'object')();
-        for (let [key, parts] of Object.entries(ex)) {
+        // the config must be an actual object so that the exports have names
+        config = a$2.sane(config, 'outlines', 'object')();
+        for (let [outline_name, parts] of Object.entries(config)) {
+
+            // placeholder for the current outline
+            outlines[outline_name] = {models: {}};
+
+            // each export can consist of multiple parts
+            // either sub-objects or arrays are fine...
             if (a$2.type(parts)() == 'array') {
                 parts = {...parts};
             }
-            parts = a$2.sane(parts, `outlines.exports.${key}`, 'object')();
-            let result = {models: {}};
+            parts = a$2.sane(parts, `outlines.${outline_name}`, 'object')();
+            
             for (let [part_name, part] of Object.entries(parts)) {
-                const name = `outlines.exports.${key}.${part_name}`;
+                
+                const name = `outlines.${outline_name}.${part_name}`;
+
+                // string part-shortcuts are expanded first
                 if (a$2.type(part)() == 'string') {
                     part = o$1.operation(part, {outline: Object.keys(outlines)});
                 }
-                const expected = ['type', 'operation'];
-                part.type = a$2.in(part.type || 'outline', `${name}.type`, ['keys', 'rectangle', 'circle', 'polygon', 'outline']);
-                part.operation = a$2.in(part.operation || 'add', `${name}.operation`, ['add', 'subtract', 'intersect', 'stack']);
 
-                let op = u$1.union;
-                if (part.operation == 'subtract') op = u$1.subtract;
-                else if (part.operation == 'intersect') op = u$1.intersect;
-                else if (part.operation == 'stack') op = u$1.stack;
+                // process keys that are common to all part declarations
+                const operation = u$1[a$2.in(part.operation || 'add', `${name}.operation`, ['add', 'subtract', 'intersect', 'stack'])];
+                const what = a$2.in(part.what || 'outline', `${name}.what`, ['rectangle', 'circle', 'polygon', 'outline']);
+                const bound = !!part.bound;
+                const mirror = a$2.sane(part.mirror || false, `${name}.mirror`, 'boolean')();
 
-                let arg;
-                let anchor;
-                const anchor_def = part.anchor || {};
-                switch (part.type) {
-                    case 'keys':
-                        arg = layout_fn(part, name, expected);
-                        break
-                    case 'rectangle':
-                        a$2.unexpected(part, name, expected.concat(['anchor', 'size', 'corner', 'bevel', 'mirror']));
-                        const size = a$2.wh(part.size, `${name}.size`)(units);
-                        const rec_units = prep$1.extend({
-                            sx: size[0],
-                            sy: size[1]
-                        }, units);
-                        anchor = anchor_lib$1.parse(anchor_def, `${name}.anchor`, points)(rec_units);
-                        const corner = a$2.sane(part.corner || 0, `${name}.corner`, 'number')(rec_units);
-                        const bevel = a$2.sane(part.bevel || 0, `${name}.bevel`, 'number')(rec_units);
-                        const rect_mirror = a$2.sane(part.mirror || false, `${name}.mirror`, 'boolean')();
-                        const rect = rectangle(size[0], size[1], corner, bevel, name);
-                        arg = anchor.position(u$1.deepcopy(rect));
-                        if (rect_mirror) {
-                            const mirror_anchor = u$1.deepcopy(anchor_def);
-                            a$2.assert(mirror_anchor.ref, `Field "${name}.anchor.ref" must be speficied if mirroring is required!`);
-                            anchor = anchor_lib$1.parse(mirror_anchor, `${name}.anchor --> mirror`, points, undefined, undefined, true)(rec_units);
-                            const mirror_rect = m$2.model.moveRelative(u$1.deepcopy(rect), [-size[0], 0]);
-                            arg = u$1.union(arg, anchor.position(mirror_rect));
-                        }
-                        break
-                    case 'circle':
-                        a$2.unexpected(part, name, expected.concat(['anchor', 'radius', 'mirror']));
-                        const radius = a$2.sane(part.radius, `${name}.radius`, 'number')(units);
-                        const circle_units = prep$1.extend({
-                            r: radius
-                        }, units);
-                        anchor = anchor_lib$1.parse(anchor_def, `${name}.anchor`, points)(circle_units);
-                        const circle_mirror = a$2.sane(part.mirror || false, `${name}.mirror`, 'boolean')();
-                        arg = u$1.circle(anchor.p, radius);
-                        if (circle_mirror) {
-                            const mirror_anchor = u$1.deepcopy(anchor_def);
-                            a$2.assert(mirror_anchor.ref, `Field "${name}.anchor.ref" must be speficied if mirroring is required!`);
-                            anchor = anchor_lib$1.parse(mirror_anchor, `${name}.anchor --> mirror`, points, undefined, undefined, true)(circle_units);
-                            arg = u$1.union(arg, u$1.circle(anchor.p, radius));
-                        }
-                        break
-                    case 'polygon':
-                        a$2.unexpected(part, name, expected.concat(['points', 'mirror']));
-                        const poly_points = a$2.sane(part.points, `${name}.points`, 'array')();
-                        const poly_mirror = a$2.sane(part.mirror || false, `${name.mirror}`, 'boolean')();
-                        const parsed_points = [];
-                        const mirror_points = [];
-                        let poly_mirror_x = 0;
-                        let last_anchor = new Point();
-                        let poly_index = 0;
-                        for (const poly_point of poly_points) {
-                            const poly_name = `${name}.points[${++poly_index}]`;
-                            if (poly_index == 1 && poly_mirror) {
-                                a$2.assert(poly_point.ref, `Field "${poly_name}.ref" must be speficied if mirroring is required!`);
-                                const mirrored_ref = anchor_lib$1.mirror(poly_point.ref, poly_mirror);
-                                a$2.assert(points[poly_point.ref], `Field "${poly_name}.ref" does not name an existing point!`);
-                                a$2.assert(points[mirrored_ref], `The mirror of field "${poly_name}.ref" ("${mirrored_ref}") does not name an existing point!`);
-                                poly_mirror_x = (points[poly_point.ref].x + points[mirrored_ref].x) / 2;
-                            }
-                            last_anchor = anchor_lib$1.parse(poly_point, poly_name, points, true, last_anchor)(units);
-                            parsed_points.push(last_anchor.p);
-                            mirror_points.push(last_anchor.clone().mirror(poly_mirror_x).p);
-                        }
-                        arg = u$1.poly(parsed_points);
-                        if (poly_mirror) {
-                            arg = u$1.union(arg, u$1.poly(mirror_points));
-                        }
-                        break
-                    case 'outline':
-                        a$2.unexpected(part, name, expected.concat(['name', 'fillet']));
-                        a$2.assert(outlines[part.name], `Field "${name}.name" does not name an existing outline!`);
-                        const fillet = a$2.sane(part.fillet || 0, `${name}.fillet`, 'number')(units);
-                        arg = u$1.deepcopy(outlines[part.name]);
-                        if (fillet) {
-                            for (const [index, chain] of m$2.model.findChains(arg).entries()) {
-                                arg.models[`fillet_${index}`] = m$2.chain.fillet(chain, fillet);
-                            }
-                        }
-                        break
-                    default:
-                        throw new Error(`Field "${name}.type" (${part.type}) does not name a valid outline part type!`)
+                // `where` is delayed until we have all, potentially what-dependent units
+                // default where is [0, 0], as per filter parsing
+                const original_where = part.where; // need to save, so the delete's don't get rid of it below
+                const where = units => filter(original_where, `${name}.where`, points, units, mirror);
+                
+                const adjust = anchor(part.adjust || {}, `${name}.adjust`, points)(units);
+                const fillet = a$2.sane(part.fillet || 0, `${name}.fillet`, 'number')(units);
+                expand_shorthand(part, units);
+                const expand = a$2.sane(part.expand || 0, `${name}.expand`, 'number')(units);
+                const joints = a$2.in(a$2.sane(part.joints || 0, `${name}.joints`, 'number')(units), `${name}.joints`, [0, 1, 2]);
+                const scale = a$2.sane(part.scale || 1, `${name}.scale`, 'number')(units);
+
+                // these keys are then removed, so ops can check their own unexpected keys without interference
+                delete part.operation;
+                delete part.what;
+                delete part.bound;
+                delete part.mirror;
+                delete part.where;
+                delete part.adjust;
+                delete part.fillet;
+                delete part.expand;
+                delete part.joints;
+                delete part.scale;
+
+                // a prototype "shape" maker (and its units) are computed
+                const [shape_maker, shape_units] = whats[what](part, name, points, outlines, units);
+
+                // and then the shape is repeated for all where positions
+                for (const w of where(shape_units)) {
+                    const point = w.clone().shift(adjust.p).rotate(adjust.r, false);
+                    let [shape, bbox] = shape_maker(point); // point is passed for mirroring metadata only...
+                    if (bound) {
+                        shape = binding(shape, bbox, point, shape_units);
+                    }
+                    shape = point.position(shape); // ...actual positioning happens here
+                    outlines[outline_name] = operation(outlines[outline_name], shape);
                 }
 
-                result = op(result, arg);
+                if (scale !== 1) {
+                    outlines[outline_name] = m$2.model.scale(outlines[outline_name], scale);
+                }
+        
+                if (expand) {
+                    outlines[outline_name] = m$2.model.outline(
+                        outlines[outline_name], Math.abs(expand), joints, (expand < 0), {farPoint: u$1.farPoint}
+                    );
+                }
+
+                if (fillet) {
+                    for (const [index, chain] of m$2.model.findChains(outlines[outline_name]).entries()) {
+                        outlines[outline_name].models[`fillet_${part_name}_${index}`] = m$2.chain.fillet(chain, fillet);
+                    }
+                }
             }
 
-            m$2.model.originate(result);
-            m$2.model.simplify(result);
-            outlines[key] = result;
+            // final adjustments
+            m$2.model.originate(outlines[outline_name]);
+            m$2.model.simplify(outlines[outline_name]);
+
         }
 
         return outlines
@@ -2579,6 +2800,96 @@
     `
     };
 
+    // footprint file for ergogen automatically generated by kicad-to-ergogen
+    // include it in ergogen/src/footprints/index.js using
+    //     require('path/to/this/file.js')
+    var xiaoBle = {
+        nets: {
+          VCC5: 'VCC5',
+          GND: 'GND',
+          VCC3: 'VCC3',
+          RST: 'RST',
+          RAW: 'RAW',
+          NFC0: 'NFC0',
+          NFC1: 'NFC1',
+          CLK: 'CLK',
+          DIO: 'DIO',
+          P0: 'P0',
+          P1: 'P1',
+          P2: 'P2',
+          P3: 'P3',
+          P4: 'P4',
+          P5: 'P5',
+          P6: 'P6',
+          P7: 'P7',
+          P8: 'P8',
+          P9: 'P9',
+          P10: 'P10'
+        },
+        params: {
+          class: 'MCU',
+          orientation: 'up'
+        },
+        body: p => {
+          const standard = `
+        footprint "xiao-ble" (layer "F.Cu") (tedit 61D90095) 
+        ${p.at /* parametric position */} 
+        (attr smd exclude_from_pos_files) 
+        (fp_text reference "${p.ref}" (at -19.3989 -11.28268 ${p.rot}) (layer "F.SilkS") ${p.ref_hide} (effects (font (size 0.889 0.889) (thickness 0.1016))) (tstamp 1c479411-a194-4685-8eeb-e81966c16c7f)) 
+        (fp_text value "" (at -19.8434 -0.29718 ${p.rot}) (layer "F.SilkS") hide (effects (font (size 0.6096 0.6096) (thickness 0.0762))) (tstamp d811e9ac-fc59-4c9b-8d93-83a5a9c048b6)) 
+        (fp_rect (start -8.89 10.5) (end 8.89 -10.5) (layer "Dwgs.User") (width 0.12) (fill none) (tstamp 116e44aa-10c6-4541-8b90-5b7a2f5434bd)) 
+        (fp_rect (start 3.350197 -6.785813) (end 5.128197 -4.118813) (layer "Dwgs.User") (width 0.12) (fill none) (tstamp a1111a45-eeef-42a4-8ca2-b88859685c82)) 
+        (fp_rect (start -3.507811 -8.182813) (end -5.285811 -10.849813) (layer "Dwgs.User") (width 0.12) (fill none) (tstamp a6f271d5-ba8a-454d-80cb-5f2f863f2343)) 
+        (fp_rect (start 3.350197 -10.849813) (end 5.128197 -8.182813) (layer "Dwgs.User") (width 0.12) (fill none) (tstamp bb88374b-bed5-4557-ac17-b524808b3664)) 
+        (fp_rect (start -5.285811 -6.785813) (end -3.507811 -4.118813) (layer "Dwgs.User") (width 0.12) (fill none) (tstamp f5248a36-36cb-4bf1-a463-d1ff91adf3ac))
+        `; 
+          
+          function pins(def_neg, def_pos) {
+            return `
+        ${p.at /*VCC Side Pins*/ }
+        (pad 1 thru_hole oval (at ${def_neg}7.62 -7.62 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 8a11f86e-586e-495d-a11e-a1e650589934) ${p.net.VCC5.str}) 
+        (pad 2 thru_hole oval (at ${def_neg}7.62 -5.08 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp e4d9ec61-16f7-410d-891d-89481964ef82) ${p.net.GND.str}) 
+        (pad 3 thru_hole oval (at ${def_neg}7.62 -2.54 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 75b890e6-df6d-4a6e-acaa-0870cda0d189) ${p.net.VCC3.str}) 
+        (pad 4 thru_hole oval (at ${def_neg}7.62 0 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 1b7a2775-7631-4d4f-8b27-ab588adb3b7d) ${p.net.P10.str}) 
+        (pad 5 thru_hole oval (at ${def_neg}7.62 2.54 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 2caa1d4c-02f2-443a-a145-dc5854878c73) ${p.net.P9.str}) 
+        (pad 6 thru_hole oval (at ${def_neg}7.62 5.08 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 761a1a33-98a4-41af-9660-18c12d51b442) ${p.net.P8.str}) 
+        (pad 7 thru_hole oval (at ${def_neg}7.62 7.62 ${p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp a20b891b-a240-411f-9914-9ac989f03074) ${p.net.P7.str}) 
+        (pad 8 thru_hole circle (at ${def_neg}1.27 -8.572 ${90 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp b370e60c-b738-4596-b4de-5ade258f269e) ${p.net.CLK.str}) 
+        (pad 9 thru_hole circle (at ${def_neg}1.27 -6.032 ${90 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp 0a24ded2-bf71-4e3b-b256-1f46996c2720) ${p.net.GND.str}) 
+        
+        ${p.at /* Reset button Side */ }
+        (pad 12 thru_hole oval (at ${def_pos}7.62 7.62 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 9c4384c0-9a57-4262-8711-eec9b8ecb4c6) ${p.net.P6.str}) 
+        (pad 13 thru_hole oval (at ${def_pos}7.62 5.08 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 867e444b-3681-4baf-9d08-1188c3544771) ${p.net.P5.str}) 
+        (pad 14 thru_hole oval (at ${def_pos}7.62 2.54 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 0a4f1792-568b-402b-9700-fd4b01130ff8) ${p.net.P4.str}) 
+        (pad 15 thru_hole oval (at ${def_pos}7.62 0 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 4522c285-a407-4012-88ce-5549f5f2a2d9) ${p.net.P3.str}) 
+        (pad 16 thru_hole oval (at ${def_pos}7.62 -2.54 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 890f2928-0780-4ddd-8ccb-24fccaa5c6fc) ${p.net.P2.str}) 
+        (pad 17 thru_hole oval (at ${def_pos}7.62 -5.08 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp 2338eb22-64ca-4f30-8ba1-2f7cf75ffba1) ${p.net.P1.str}) 
+        (pad 18 thru_hole oval (at ${def_pos}7.62 -7.62 ${180 + p.rot}) (size 2.75 1.8) (drill 1 (offset ${def_neg}0.475 0)) (layers *.Cu *.Mask) (tstamp ae516570-a837-4ec7-a722-6d190e57c256) ${p.net.P0.str}) 
+        (pad 19 thru_hole circle (at ${def_pos}1.27 -8.572 ${90 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp 19c0bd2b-6b0e-4d97-a0be-01d0c6efb6b0) ${p.net.DIO.str}) 
+        (pad 20 thru_hole circle (at ${def_pos}1.27 -6.032 ${90 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp 5aa3a350-81ea-4759-8164-45e4cfc68b3a) ${p.net.RST.str}) 
+        
+        ${p.at /* Battery Pins */ }
+        (pad 21 thru_hole circle (at ${def_pos}4.445 -0.317 ${180 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp 79509df8-dd6d-474b-bcaa-263daec27871) ${p.net.RAW.str}) 
+        (pad 22 thru_hole circle (at ${def_pos}4.445 -2.222 ${180 + p.rot}) (size 1.397 1.397) (drill 1.016) (layers *.Cu *.Mask) (tstamp 4a564fab-879b-49c4-b927-6f8f249dc7f0) ${p.net.GND.str}) 
+        
+        `
+          }
+          if (p.param.orientation == 'up') {
+            return `(
+        ${standard}
+        ${pins('-', '')}
+        )
+        `
+          } else {
+            return `(
+        ${standard}
+        ${pins('', '-')}
+        )
+        `        
+          }
+        }
+      };
+
     var footprints = {
         alps: alps,
         button: button,
@@ -2598,12 +2909,13 @@
         slider: slider,
         trrs: trrs,
         via: via,
+        'xiao-ble': xiaoBle,
     };
 
     const m = require$$0__default["default"];
     const a = assert$1;
     const prep = prepare$1;
-    const anchor_lib = anchor$1;
+    const anchor_lib = anchor$3;
 
     const kicad_prefix = `
 (kicad_pcb (version 20171130) (host pcbnew 5.1.6)
@@ -2758,7 +3070,7 @@
         // config sanitization
         a.unexpected(config, name, ['type', 'anchor', 'nets', 'anchors', 'params']);
         const type = a.in(config.type, `${name}.type`, Object.keys(footprint_types));
-        let anchor = anchor_lib.parse(config.anchor || {}, `${name}.anchor`, points, true, point)(units);
+        let anchor = anchor_lib.parse(config.anchor || {}, `${name}.anchor`, points, point)(units);
         const nets = a.sane(config.nets || {}, `${name}.nets`, 'object')();
         const anchors = a.sane(config.anchors || {}, `${name}.anchors`, 'object')();
         const params = a.sane(config.params || {}, `${name}.params`, 'object')();
@@ -2791,7 +3103,7 @@
         parsed_params.xy = (x, y) => {
             const new_anchor = anchor_lib.parse({
                 shift: [x, -y]
-            }, '_internal_footprint_xy', points, true, anchor)(units);
+            }, '_internal_footprint_xy', points, anchor)(units);
             return `${new_anchor.x} ${-new_anchor.y}`
         };
 
@@ -2826,7 +3138,7 @@
         // parsing anchor-type parameters
         parsed_params.anchors = {};
         for (const [anchor_name, anchor_config] of Object.entries(prep.extend(fp.anchors || {}, anchors))) {
-            let parsed_anchor = anchor_lib.parse(anchor_config || {}, `${name}.anchors.${anchor_name}`, points, true, anchor)(units);
+            let parsed_anchor = anchor_lib.parse(anchor_config || {}, `${name}.anchors.${anchor_name}`, points, anchor)(units);
             parsed_anchor.y = -parsed_anchor.y;
             parsed_params.anchors[anchor_name] = parsed_anchor;
         }
@@ -2922,7 +3234,7 @@
     };
 
     var name = "ergogen";
-    var version$1 = "3.1.2";
+    var version$1 = "4.0.0-develop";
     var description = "Ergonomic keyboard layout generator";
     var author = "Bán Dénes <mr@zealot.hu>";
     var license = "MIT";
@@ -2937,25 +3249,23 @@
     	coverage: "nyc --reporter=html --reporter=text npm test"
     };
     var dependencies = {
-    	"@jscad/openjscad": "github:ergogen/oldjscad",
-    	"fs-extra": "^10.0.0",
-    	"js-yaml": "^3.14.0",
+    	"fs-extra": "^10.0.1",
+    	"js-yaml": "^3.14.1",
     	"kle-serial": "github:ergogen/kle-serial#ergogen",
     	makerjs: "github:ergogen/maker.js#ergogen",
-    	mathjs: "^10.0.0",
-    	semver: "^7.3.5",
-    	yargs: "^17.3.0"
+    	mathjs: "^10.1.1",
+    	yargs: "^17.3.1"
     };
     var devDependencies = {
-    	"@rollup/plugin-commonjs": "^21.0.1",
+    	"@rollup/plugin-commonjs": "^21.0.2",
     	"@rollup/plugin-json": "^4.1.0",
-    	chai: "^4.3.4",
+    	chai: "^4.3.6",
     	"chai-as-promised": "^7.1.1",
-    	"dir-compare": "^3.3.0",
+    	"dir-compare": "^4.0.0",
     	glob: "^7.2.0",
-    	mocha: "^9.1.3",
+    	mocha: "^9.2.1",
     	nyc: "^15.1.0",
-    	rollup: "^2.61.1"
+    	rollup: "^2.68.0"
     };
     var nyc = {
     	all: true,
@@ -2963,7 +3273,7 @@
     		"src/**/*.js"
     	]
     };
-    var require$$9 = {
+    var require$$8 = {
     	name: name,
     	version: version$1,
     	description: description,
@@ -2989,8 +3299,7 @@
     const cases_lib = cases;
     const pcbs_lib = pcbs;
 
-    const semver = require$$8__default["default"];
-    const version = require$$9.version;
+    const version = require$$8.version;
 
     const process = async (raw, debug=false, logger=()=>{}) => {
 
@@ -3016,12 +3325,9 @@
 
         if (config.meta && config.meta.engine) {
             logger('Checking compatibility...');
-            const engine = semver.validRange(config.meta.engine);
-            if (!engine) {
-                throw new Error('Invalid config engine declaration!')
-            }
-            if (!semver.satisfies(version, engine)) {
-                throw new Error(`Current ergogen version (${version}) doesn\'t satisfy config's engine requirement (${engine})!`)
+            const engine = u.semver(config.meta.engine, 'config.meta.engine');
+            if (!u.satisfies(version, engine)) {
+                throw new Error(`Current ergogen version (${version}) doesn\'t satisfy config's engine requirement (${config.meta.engine})!`)
             }
         }
 
@@ -3053,12 +3359,12 @@
             empty = false;
         }
 
-        logger('Extruding cases...');
+        logger('Modeling cases...');
         const cases = cases_lib.parse(config.cases || {}, outlines, units);
         results.cases = {};
         for (const [case_name, case_script] of Object.entries(cases)) {
             if (!debug && case_name.startsWith('_')) continue
-            results.cases[case_name] = await io.threedee(case_script, debug);
+            results.cases[case_name] = {jscad: case_script};
             empty = false;
         }
 
